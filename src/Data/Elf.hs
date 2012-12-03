@@ -718,7 +718,7 @@ sectionByIndex _ _ = Nothing
 infoToTypeAndBind :: Word8 -> (ElfSymbolType,ElfSymbolBinding)
 infoToTypeAndBind i =
     let t = fromIntegral $ i .&. 0x0F
-        b = fromIntegral $ (i .&. 0xF) `shiftR` 4
+        b = fromIntegral $ (i .&. 0xF0) `shiftR` 4
     in (toEnum t, toEnum b)
 
 data ElfSymbolBinding
