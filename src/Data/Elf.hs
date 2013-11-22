@@ -94,6 +94,23 @@ data ElfSectionType
     | SHT_DYNSYM        -- ^ Contains a dynamic loader symbol table
     | SHT_EXT Word32    -- ^ Processor- or environment-specific type
     deriving (Eq, Show)
+
+projectElfSectionType SHT_NULL     = 0  
+projectElfSectionType SHT_PROGBITS = 1 
+projectElfSectionType SHT_SYMTAB   = 2 
+projectElfSectionType SHT_STRTAB   = 3 
+projectElfSectionType SHT_RELA     = 4 
+projectElfSectionType SHT_HASH     = 5 
+projectElfSectionType SHT_DYNAMIC  = 6 
+projectElfSectionType SHT_NOTE     = 7 
+projectElfSectionType SHT_NOBITS   = 8 
+projectElfSectionType SHT_REL      = 9 
+projectElfSectionType SHT_SHLIB    = 10
+projectElfSectionType SHT_DYNSYM   = 11
+projectElfSectionType (SHT_EXT n)  = n 
+
+
+putElfSectionType ew t = putWord32 ew $ projectElfSectionType t
 getElfSectionType er = liftM getElfSectionType_ $ getWord32 er
     where getElfSectionType_ 0  = SHT_NULL
           getElfSectionType_ 1  = SHT_PROGBITS
@@ -123,7 +140,17 @@ getElfSectionFlags n word | testBit word (n-1) = SHF_EXT (n-1) : getElfSectionFl
 getElfSectionFlags n word = getElfSectionFlags (n-1) word
 getElfSectionFlags32 = liftM (getElfSectionFlags 32) . getWord32 
 getElfSectionFlags64 = liftM (getElfSectionFlags 64) . getWord64
-    
+
+projectElfSectionFlags :: [ElfSectionFlags] -> Word64
+projectElfSectionFlags fs = foldr (.|.) 0 $ map convFlag fs
+  where convFlag SHF_WRITE     = 1
+        convFlag SHF_ALLOC     = 2
+        convFlag SHF_EXECINSTR = 4
+        convflag (SHF_EXT n)   = 2^n
+
+putElfSectionFlags32 ew fs = putWord32 ew $ fromIntegral $ projectElfSectionFlags fs
+putElfSectionFlags64 ew fs = putWord64 ew $ projectElfSectionFlags fs
+
 data ElfClass
     = ELFCLASS32 -- ^ 32-bit ELF format
     | ELFCLASS64 -- ^ 64-bit ELF format
@@ -536,6 +563,38 @@ getElf_Shdr_OffsetSize ei_class er =
             sh_size   <- getWord64 er
             return (sh_offset, sh_size)
 
+putSection :: ElfWriter -> ElfClass -> Word64 -> ElfSection -> PutM Word64
+putSection ew ec doff es = do
+  let sz = B.length $ elfSectionData es
+  case ec of
+    ELFCLASS32 -> do
+      putWord32 ew 0 -- TODO get strings defuxed
+      putElfSectionType ew $ elfSectionType es
+      putElfSectionFlags32 ew $ elfSectionFlags es
+      putWord32 ew $ fromIntegral (elfSectionAddr es)
+      if sz == 0
+        then putWord32 ew $ fromIntegral doff
+        else putWord32 ew 0
+      putWord32 ew $ fromIntegral sz
+      putWord32 ew $ elfSectionLink es
+      putWord32 ew $ elfSectionInfo es
+      putWord32 ew $ fromIntegral $ elfSectionAddrAlign es
+      putWord32 ew $ fromIntegral $ elfSectionEntSize es
+    ELFCLASS64 -> do
+      putWord32 ew 0 -- TODO get strings defuxed
+      putElfSectionType ew $ elfSectionType es
+      putElfSectionFlags64 ew $ elfSectionFlags es
+      putWord64 ew $ elfSectionAddr es
+      if sz == 0
+        then putWord64 ew doff
+        else putWord64 ew 0
+      putWord64 ew $ fromIntegral sz
+      putWord32 ew $ elfSectionLink es
+      putWord32 ew $ elfSectionInfo es
+      putWord64 ew $ elfSectionAddrAlign es
+      putWord64 ew $ elfSectionEntSize es
+  return $ doff + (fromIntegral sz)
+
 getElf_Shdr :: ElfClass -> ElfReader -> B.ByteString -> B.ByteString -> Get ElfSection
 getElf_Shdr ei_class er elf_file string_section =
     case ei_class of
@@ -749,10 +808,12 @@ renderElf e =
       shsize = shentSize $ elfClass e
       shoff  = ehdrSize $ elfClass e
       phoff  = (shsize * shnum) + shoff
-      doff   = (phsize * phnum) + phoff
+      doff   = fromIntegral $ (phsize * phnum) + phoff
       shdx   = 0 --TODO we don't care about the string table for the moment
       sects  = B.concat $ map elfSectionData $ elfSections e
       segs   = B.concat $ map elfSegmentData $ elfSegments e
+      ew     = elfWriter $ elfData e
+      ec     = elfClass e
       putElf = do
         putElf_Ehdr e
                     (fromIntegral phoff)
@@ -760,12 +821,9 @@ renderElf e =
                     (fromIntegral shoff)
                     (fromIntegral shnum)
                     shdx
-        doffsh <- foldM putSection doff (elfSections e)
-        foldM_ putSegment doffsh (elfSegments e)
+        doffsh <- foldM (putSection ew ec) doff (elfSections e)
+        foldM_ (putSegment ew ec) doffsh (elfSegments e)
    in B.concat [L.toStrict $ runPut putElf, sects, segs]
-
-putSection = undefined
-putSegment = undefined
 
 data ElfSegment = ElfSegment
   { elfSegmentType      :: ElfSegmentType   -- ^ Segment type
@@ -789,6 +847,30 @@ data ElfSegmentType
   | PT_Other Word32 -- ^ Some other type
     deriving (Eq,Show)
 
+putSegment :: ElfWriter -> ElfClass -> Word64 -> ElfSegment -> PutM Word64
+putSegment ew ec doff es = do
+  let sz = B.length $ elfSegmentData es
+  case ec of
+    ELFCLASS64 -> do
+      putWord32 ew $ projSegType $ elfSegmentType es
+      putWord32 ew $ projSegFlags $ elfSegmentFlags es
+      putWord64 ew $ fromIntegral doff
+      putWord64 ew $ elfSegmentVirtAddr es
+      putWord64 ew $ elfSegmentPhysAddr es
+      putWord64 ew $ fromIntegral sz
+      putWord64 ew $ elfSegmentMemSize es
+      putWord64 ew $ elfSegmentAlign es
+    ELFCLASS32 -> do
+      putWord32 ew $ projSegType $ elfSegmentType es
+      putWord32 ew $ fromIntegral doff
+      putWord32 ew $ fromIntegral $ elfSegmentVirtAddr es
+      putWord32 ew $ fromIntegral $ elfSegmentPhysAddr es
+      putWord32 ew $ fromIntegral sz
+      putWord32 ew $ fromIntegral $ elfSegmentMemSize es
+      putWord32 ew $ projSegFlags $ elfSegmentFlags es
+      putWord32 ew $ fromIntegral $ elfSegmentAlign es
+  return $ doff + (fromIntegral sz)
+ 
 parseElfSegmentType :: Word32 -> ElfSegmentType
 parseElfSegmentType x =
   case x of
@@ -801,6 +883,16 @@ parseElfSegmentType x =
     6 -> PT_PHDR
     _ -> PT_Other x
 
+projSegType t =
+  case t of
+    PT_NULL    -> 0 
+    PT_LOAD    -> 1
+    PT_DYNAMIC -> 2
+    PT_INTERP  -> 3
+    PT_NOTE    -> 4
+    PT_SHLIB   -> 5
+    PT_PHDR    -> 6
+    PT_Other x -> x
 
 parseElfSegmentEntry :: ElfClass -> ElfReader -> B.ByteString -> Get ElfSegment
 parseElfSegmentEntry elf_class er elf_file = case elf_class of
@@ -855,6 +947,13 @@ parseElfSegmentFlags word = [ cvt bit | bit <- [ 0 .. 31 ], testBit word bit ]
         cvt 1 = PF_W
         cvt 2 = PF_R
         cvt n = PF_Ext n
+
+projSegFlags :: [ElfSegmentFlag] -> Word32
+projSegFlags fs = foldr (.|.) 0 $ map convFlag fs
+  where convFlag PF_X = 1
+        convFlag PF_W = 2
+        convFlag PF_R = 4
+        convFlag (PF_Ext n) = 2^n
 
 -- | The symbol table entries consist of index information to be read from other
 -- parts of the ELF file. Some of this information is automatically retrieved
