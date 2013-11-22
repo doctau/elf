@@ -857,7 +857,7 @@ getSymbolTableEntries :: Elf -> ElfSection -> [ElfSymbolTableEntry]
 getSymbolTableEntries e s =
     let link   = elfSectionLink s
         strtab = lookup (fromIntegral link) (zip [0..] (elfSections e))
-    in runGetMany (getSymbolTableEntry e strtab) (L.fromChunks [elfSectionData s])
+    in runGetMany (getSymbolTableEntry e strtab) (elfSectionData s)
 
 -- | Use the symbol offset and size to extract its definition
 -- (in the form of a ByteString).
@@ -871,10 +871,14 @@ findSymbolDefinition e =
         def = fmap (B.take len . B.drop start) enclosingData
     in if def == Just B.empty then Nothing else def
 
-runGetMany :: Get a -> L.ByteString -> [a]
+runGetMany :: Get a -> B.ByteString -> [a]
 runGetMany g bs
-    | L.length bs == 0 = []
-    | otherwise        = let (v,bs',_) = runGetState g bs 0 in v: runGetMany g bs'
+    | B.length bs == 0 = []
+    | otherwise        =
+      case (runGetIncremental g) `pushChunk` bs of 
+        Fail _ _ _ -> []
+        Partial _  -> []
+        Done bs' _ v -> v : runGetMany g bs'
 
 symbolTableSections :: Elf -> [ElfSection]
 symbolTableSections e = filter ((== SHT_SYMTAB) . elfSectionType) (elfSections e)
