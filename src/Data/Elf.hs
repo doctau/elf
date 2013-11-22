@@ -148,7 +148,7 @@ projectElfSectionFlags fs = foldr (.|.) 0 $ map convFlag fs
   where convFlag SHF_WRITE     = 1
         convFlag SHF_ALLOC     = 2
         convFlag SHF_EXECINSTR = 4
-        convflag (SHF_EXT n)   = 2^n
+        convFlag (SHF_EXT n)   = 2^n
 
 putElfSectionFlags32 ew fs = putWord32 ew $ fromIntegral $ projectElfSectionFlags fs
 putElfSectionFlags64 ew fs = putWord64 ew $ projectElfSectionFlags fs
@@ -574,7 +574,7 @@ putSection ew ec doff es = do
       putElfSectionType ew $ elfSectionType es
       putElfSectionFlags32 ew $ elfSectionFlags es
       putWord32 ew $ fromIntegral (elfSectionAddr es)
-      if sz == 0
+      if sz /= 0
         then putWord32 ew $ fromIntegral doff
         else putWord32 ew 0
       putWord32 ew $ fromIntegral sz
@@ -587,7 +587,7 @@ putSection ew ec doff es = do
       putElfSectionType ew $ elfSectionType es
       putElfSectionFlags64 ew $ elfSectionFlags es
       putWord64 ew $ elfSectionAddr es
-      if sz == 0
+      if sz /= 0
         then putWord64 ew doff
         else putWord64 ew 0
       putWord64 ew $ fromIntegral sz
@@ -622,7 +622,7 @@ getElf_Shdr ei_class er elf_file string_section =
                 , elfSectionAddrAlign = fromIntegral sh_addralign
                 , elfSectionEntSize   = fromIntegral sh_entsize
                 , elfSectionData      = B.take (fromIntegral sh_size) $ B.drop (fromIntegral sh_offset) elf_file
-                , elfSectionNameOff   = fromIntegral $ sh_offset
+                , elfSectionNameOff   = fromIntegral $ sh_name
                 }
         ELFCLASS64 -> do
             sh_name      <- getWord32 er
@@ -646,7 +646,7 @@ getElf_Shdr ei_class er elf_file string_section =
                 , elfSectionAddrAlign = sh_addralign
                 , elfSectionEntSize   = sh_entsize
                 , elfSectionData      = B.take (fromIntegral sh_size) $ B.drop (fromIntegral sh_offset) elf_file
-                , elfSectionNameOff   = sh_offset
+                , elfSectionNameOff   = fromIntegral $ sh_name
                 }
 
 data TableInfo = TableInfo { tableOffset :: Int, entrySize :: Int, entryNum :: Int }
@@ -812,9 +812,9 @@ renderElf e =
       shnum  = length $ elfSections e
       phsize = phentSize $ elfClass e
       shsize = shentSize $ elfClass e
-      shoff  = ehdrSize $ elfClass e
-      phoff  = (shsize * shnum) + shoff
-      doff   = fromIntegral $ (phsize * phnum) + phoff
+      phoff  = ehdrSize $ elfClass e
+      shoff  = (phsize * phnum) + phoff
+      doff   = fromIntegral $ (shsize * shnum) + shoff
       shdx   = elfStringTableIndex e
       sects  = B.concat $ map elfSectionData $ elfSections e
       segs   = B.concat $ map elfSegmentData $ elfSegments e
@@ -827,9 +827,10 @@ renderElf e =
                     (fromIntegral shoff)
                     (fromIntegral shnum)
                     shdx
-        doffsh <- foldM (putSection ew ec) doff (elfSections e)
-        foldM_ (putSegment ew ec) doffsh (elfSegments e)
-   in B.concat [L.toStrict $ runPut putElf, sects, segs]
+        doffph <- foldM (putSegment ew ec) doff (elfSegments e)
+        doffsh_ <- foldM (putSection ew ec) doffph (elfSections e)
+        return ()
+   in B.concat [L.toStrict $ runPut putElf, segs, sects]
 
 data ElfSegment = ElfSegment
   { elfSegmentType      :: ElfSegmentType   -- ^ Segment type
@@ -860,7 +861,9 @@ putSegment ew ec doff es = do
     ELFCLASS64 -> do
       putWord32 ew $ projSegType $ elfSegmentType es
       putWord32 ew $ projSegFlags $ elfSegmentFlags es
-      putWord64 ew $ fromIntegral doff
+      if sz == 0
+        then putWord64 ew 0
+        else putWord64 ew $ fromIntegral doff
       putWord64 ew $ elfSegmentVirtAddr es
       putWord64 ew $ elfSegmentPhysAddr es
       putWord64 ew $ fromIntegral sz
@@ -868,7 +871,9 @@ putSegment ew ec doff es = do
       putWord64 ew $ elfSegmentAlign es
     ELFCLASS32 -> do
       putWord32 ew $ projSegType $ elfSegmentType es
-      putWord32 ew $ fromIntegral doff
+      if sz == 0
+        then putWord32 ew 0
+        else putWord32 ew $ fromIntegral doff
       putWord32 ew $ fromIntegral $ elfSegmentVirtAddr es
       putWord32 ew $ fromIntegral $ elfSegmentPhysAddr es
       putWord32 ew $ fromIntegral sz
