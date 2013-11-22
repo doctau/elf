@@ -44,6 +44,7 @@ data Elf = Elf
     , elfEntry      :: Word64        -- ^ Virtual address of the program entry point. 0 for non-executable Elfs.
     , elfSections   :: [ElfSection]  -- ^ List of sections in the file.
     , elfSegments   :: [ElfSegment]  -- ^ List of segments in the file.
+    , elfStringTableIndex :: Word16  -- ^ String table index
     } deriving (Eq, Show)
 
 data ElfSection = ElfSection
@@ -57,6 +58,7 @@ data ElfSection = ElfSection
     , elfSectionAddrAlign :: Word64            -- ^ Contains the required alignment of the section. Must be a power of two.
     , elfSectionEntSize   :: Word64            -- ^ Size of entries if section has a table.
     , elfSectionData      :: B.ByteString      -- ^ The raw data for the section.
+    , elfSectionNameOff   :: Word64            -- ^ The offset of the elf section name in the string table.
     } deriving (Eq, Show)
 
 magicStr = "\DELELF"
@@ -568,7 +570,7 @@ putSection ew ec doff es = do
   let sz = B.length $ elfSectionData es
   case ec of
     ELFCLASS32 -> do
-      putWord32 ew 0 -- TODO get strings defuxed
+      putWord32 ew $ fromIntegral $ elfSectionNameOff es
       putElfSectionType ew $ elfSectionType es
       putElfSectionFlags32 ew $ elfSectionFlags es
       putWord32 ew $ fromIntegral (elfSectionAddr es)
@@ -581,7 +583,7 @@ putSection ew ec doff es = do
       putWord32 ew $ fromIntegral $ elfSectionAddrAlign es
       putWord32 ew $ fromIntegral $ elfSectionEntSize es
     ELFCLASS64 -> do
-      putWord32 ew 0 -- TODO get strings defuxed
+      putWord32 ew $ fromIntegral $ elfSectionNameOff es
       putElfSectionType ew $ elfSectionType es
       putElfSectionFlags64 ew $ elfSectionFlags es
       putWord64 ew $ elfSectionAddr es
@@ -620,6 +622,7 @@ getElf_Shdr ei_class er elf_file string_section =
                 , elfSectionAddrAlign = fromIntegral sh_addralign
                 , elfSectionEntSize   = fromIntegral sh_entsize
                 , elfSectionData      = B.take (fromIntegral sh_size) $ B.drop (fromIntegral sh_offset) elf_file
+                , elfSectionNameOff   = fromIntegral $ sh_offset
                 }
         ELFCLASS64 -> do
             sh_name      <- getWord32 er
@@ -643,6 +646,7 @@ getElf_Shdr ei_class er elf_file string_section =
                 , elfSectionAddrAlign = sh_addralign
                 , elfSectionEntSize   = sh_entsize
                 , elfSectionData      = B.take (fromIntegral sh_size) $ B.drop (fromIntegral sh_offset) elf_file
+                , elfSectionNameOff   = sh_offset
                 }
 
 data TableInfo = TableInfo { tableOffset :: Int, entrySize :: Int, entryNum :: Int }
@@ -681,7 +685,8 @@ getElf_Ehdr = do
                         , elfMachine    = e_machine
                         , elfEntry      = e_entry
                         , elfSections   = []
-                        , elfSegments   = [] }
+                        , elfSegments   = []
+                        , elfStringTableIndex = e_shstrndx}
                    , TableInfo { tableOffset = fromIntegral e_phoff, entrySize = fromIntegral e_phentsize, entryNum = fromIntegral e_phnum }
                    , TableInfo { tableOffset = fromIntegral e_shoff, entrySize = fromIntegral e_shentsize, entryNum = fromIntegral e_shnum }
                    , e_shstrndx)
@@ -708,7 +713,8 @@ getElf_Ehdr = do
                         , elfMachine    = e_machine
                         , elfEntry      = e_entry
                         , elfSections   = []
-                        , elfSegments   = [] }
+                        , elfSegments   = []
+                        , elfStringTableIndex = e_shstrndx}
                    , TableInfo { tableOffset = fromIntegral e_phoff, entrySize = fromIntegral e_phentsize, entryNum = fromIntegral e_phnum }
                    , TableInfo { tableOffset = fromIntegral e_shoff, entrySize = fromIntegral e_shentsize, entryNum = fromIntegral e_shnum }
                    , e_shstrndx)
@@ -809,7 +815,7 @@ renderElf e =
       shoff  = ehdrSize $ elfClass e
       phoff  = (shsize * shnum) + shoff
       doff   = fromIntegral $ (phsize * phnum) + phoff
-      shdx   = 0 --TODO we don't care about the string table for the moment
+      shdx   = elfStringTableIndex e
       sects  = B.concat $ map elfSectionData $ elfSections e
       segs   = B.concat $ map elfSegmentData $ elfSegments e
       ew     = elfWriter $ elfData e
