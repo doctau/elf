@@ -663,8 +663,14 @@ phentSize ELFCLASS64 = 56
 shentSize ELFCLASS32 = 40
 shentSize ELFCLASS64 = 64
 
-putElf_Ehdr :: (Elf, Word64, Word16, Word64, Word16, Word16) -> Put
-putElf_Ehdr (e, phoff, phnum, shoff, shnum, shstrndx) = do
+putElf_Ehdr :: Elf
+            -> Word64
+            -> Word16
+            -> Word64
+            -> Word16
+            -> Word16
+            -> Put
+putElf_Ehdr e phoff phnum shoff shnum shstrndx = do
     putElfMagic
     putElfClass $ elfClass e
     putElfData $ elfData e
@@ -736,7 +742,30 @@ parseElf b =
 -- | Renders an Elf record back into a ByteString. Intended for modifying binaries. If an ELF uses a feature not
 --   understood by the parser, this may not be idempotent, but it is intended that this be an inverse of parseElf
 renderElf :: Elf -> B.ByteString
-renderElf e = undefined
+renderElf e =
+  let phnum  = length $ elfSegments e
+      shnum  = length $ elfSections e
+      phsize = phentSize $ elfClass e
+      shsize = shentSize $ elfClass e
+      shoff  = ehdrSize $ elfClass e
+      phoff  = (shsize * shnum) + shoff
+      doff   = (phsize * phnum) + phoff
+      shdx   = 0 --TODO we don't care about the string table for the moment
+      sects  = B.concat $ map elfSectionData $ elfSections e
+      segs   = B.concat $ map elfSegmentData $ elfSegments e
+      putElf = do
+        putElf_Ehdr e
+                    (fromIntegral phoff)
+                    (fromIntegral phnum)
+                    (fromIntegral shoff)
+                    (fromIntegral shnum)
+                    shdx
+        doffsh <- foldM putSection doff (elfSections e)
+        foldM_ putSegment doffsh (elfSegments e)
+   in B.concat [L.toStrict $ runPut putElf, sects, segs]
+
+putSection = undefined
+putSegment = undefined
 
 data ElfSegment = ElfSegment
   { elfSegmentType      :: ElfSegmentType   -- ^ Segment type
