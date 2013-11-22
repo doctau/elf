@@ -1,5 +1,6 @@
 -- | Data.Elf  is a module for parsing a ByteString of an ELF file into an Elf record.
 module Data.Elf ( parseElf
+                , renderElf
                 , parseSymbolTables
                 , findSymbolDefinition
                 , Elf(..)
@@ -21,7 +22,9 @@ module Data.Elf ( parseElf
 
 import Data.Binary
 import Data.Binary.Get as G
+import Data.Binary.Put as P
 import Data.Bits
+import Data.Char
 import Data.Maybe
 import Data.Word
 import Numeric
@@ -56,12 +59,16 @@ data ElfSection = ElfSection
     , elfSectionData      :: B.ByteString      -- ^ The raw data for the section.
     } deriving (Eq, Show)
 
+magicStr = "\DELELF"
+
 getElfMagic = do
     ei_magic <- liftM (map B.w2c) $ sequence [getWord8, getWord8, getWord8, getWord8]
-    if ei_magic /= "\DELELF" then
+    if ei_magic /= magicStr then
         fail "Invalid magic number for ELF"
      else
         return ei_magic
+
+putElfMagic = mapM_ putWord8 $ map (fromIntegral . ord) magicStr
 
 getElfVersion = do
     ei_version <- getWord8
@@ -69,6 +76,8 @@ getElfVersion = do
         fail "Invalid version number for ELF"
      else
         return ei_version
+
+putElfVersion = putWord8
 
 data ElfSectionType
     = SHT_NULL          -- ^ Identifies an empty section header.
@@ -124,6 +133,9 @@ getElfClass = getWord8 >>= getElfClass_
           getElfClass_ 2 = return ELFCLASS64
           getElfClass_ _ = fail "Invalid ELF class"
 
+putElfClass ELFCLASS32 = putWord8 1
+putElfClass ELFCLASS64 = putWord8 2
+
 data ElfData
     = ELFDATA2LSB -- ^ Little-endian ELF format
     | ELFDATA2MSB -- ^ Big-endian ELF format
@@ -132,6 +144,9 @@ getElfData = getWord8 >>= getElfData_
     where getElfData_ 1 = return ELFDATA2LSB
           getElfData_ 2 = return ELFDATA2MSB
           getElfData_ _ = fail "Invalid ELF data"
+
+putElfData ELFDATA2LSB = putWord8 1
+putElfData ELFDATA2MSB = putWord8 2
 
 data ElfOSABI
     = ELFOSABI_SYSV       -- ^ No extensions or unspecified
@@ -169,7 +184,28 @@ getElfOsabi = liftM getElfOsabi_ getWord8
           getElfOsabi_ 15  = ELFOSABI_AROS
           getElfOsabi_ 97  = ELFOSABI_ARM
           getElfOsabi_ 255 = ELFOSABI_STANDALONE
-          getElfOsabi_ n   = ELFOSABI_EXT n
+          getElfOsabi_ n   = ELFOSABI_EXT n      
+
+projectElfOsabi ELFOSABI_SYSV       = 0  
+projectElfOsabi ELFOSABI_HPUX       = 1  
+projectElfOsabi ELFOSABI_NETBSD     = 2  
+projectElfOsabi ELFOSABI_LINUX      = 3  
+projectElfOsabi ELFOSABI_SOLARIS    = 6  
+projectElfOsabi ELFOSABI_AIX        = 7  
+projectElfOsabi ELFOSABI_IRIX       = 8  
+projectElfOsabi ELFOSABI_FREEBSD    = 9  
+projectElfOsabi ELFOSABI_TRU64      = 10 
+projectElfOsabi ELFOSABI_MODESTO    = 11 
+projectElfOsabi ELFOSABI_OPENBSD    = 12 
+projectElfOsabi ELFOSABI_OPENVMS    = 13 
+projectElfOsabi ELFOSABI_NSK        = 14 
+projectElfOsabi ELFOSABI_AROS       = 15 
+projectElfOsabi ELFOSABI_ARM        = 97 
+projectElfOsabi ELFOSABI_STANDALONE = 255
+projectElfOsabi (ELFOSABI_EXT n)    = n   
+
+
+putElfOsabi osabi = putWord8 (projectElfOsabi osabi)
 
 data ElfType
     = ET_NONE       -- ^ Unspecified type
@@ -186,6 +222,16 @@ getElfType = liftM getElfType_ . getWord16
           getElfType_ 3 = ET_DYN
           getElfType_ 4 = ET_CORE
           getElfType_ n = ET_EXT n
+
+projectElfType ET_NONE    = 0
+projectElfType ET_REL     = 1
+projectElfType ET_EXEC    = 2
+projectElfType ET_DYN     = 3
+projectElfType ET_CORE    = 4
+projectElfType (ET_EXT n) = n
+
+
+putElfType ew et = putWord16 ew $ projectElfType et
 
 data ElfMachine
     = EM_NONE        -- ^ No machine
@@ -283,6 +329,103 @@ data ElfMachine
     | EM_UNICORE     -- ^ Microprocessor series from PKU-Unity Ltd. and MPRC of Peking University
     | EM_EXT Word16  -- ^ Other
     deriving (Eq, Show)
+
+projectElfMachine EM_NONE        = 0  
+projectElfMachine EM_M32         = 1  
+projectElfMachine EM_SPARC       = 2  
+projectElfMachine EM_386         = 3  
+projectElfMachine EM_68K         = 4  
+projectElfMachine EM_88K         = 5  
+projectElfMachine EM_486         = 6  
+projectElfMachine EM_860         = 7  
+projectElfMachine EM_MIPS        = 8  
+projectElfMachine EM_S370        = 9  
+projectElfMachine EM_MIPS_RS3_LE = 10 
+projectElfMachine EM_SPARC64     = 11 
+projectElfMachine EM_PARISC      = 15 
+projectElfMachine EM_VPP500      = 17 
+projectElfMachine EM_SPARC32PLUS = 18 
+projectElfMachine EM_960         = 19 
+projectElfMachine EM_PPC         = 20 
+projectElfMachine EM_PPC64       = 21 
+projectElfMachine EM_S390        = 22 
+projectElfMachine EM_SPU         = 23 
+projectElfMachine EM_V800        = 36 
+projectElfMachine EM_FR20        = 37 
+projectElfMachine EM_RH32        = 38 
+projectElfMachine EM_RCE         = 39 
+projectElfMachine EM_ARM         = 40 
+projectElfMachine EM_ALPHA       = 41 
+projectElfMachine EM_SH          = 42 
+projectElfMachine EM_SPARCV9     = 43 
+projectElfMachine EM_TRICORE     = 44 
+projectElfMachine EM_ARC         = 45 
+projectElfMachine EM_H8_300      = 46 
+projectElfMachine EM_H8_300H     = 47 
+projectElfMachine EM_H8S         = 48 
+projectElfMachine EM_H8_500      = 49 
+projectElfMachine EM_IA_64       = 50 
+projectElfMachine EM_MIPS_X      = 51 
+projectElfMachine EM_COLDFIRE    = 52 
+projectElfMachine EM_68HC12      = 53 
+projectElfMachine EM_MMA         = 54 
+projectElfMachine EM_PCP         = 55 
+projectElfMachine EM_NCPU        = 56 
+projectElfMachine EM_NDR1        = 57 
+projectElfMachine EM_STARCORE    = 58 
+projectElfMachine EM_ME16        = 59 
+projectElfMachine EM_ST100       = 60 
+projectElfMachine EM_TINYJ       = 61 
+projectElfMachine EM_X86_64      = 62 
+projectElfMachine EM_PDSP        = 63 
+projectElfMachine EM_FX66        = 66 
+projectElfMachine EM_ST9PLUS     = 67 
+projectElfMachine EM_ST7         = 68 
+projectElfMachine EM_68HC16      = 69 
+projectElfMachine EM_68HC11      = 70 
+projectElfMachine EM_68HC08      = 71 
+projectElfMachine EM_68HC05      = 72 
+projectElfMachine EM_SVX         = 73 
+projectElfMachine EM_ST19        = 74 
+projectElfMachine EM_VAX         = 75 
+projectElfMachine EM_CRIS        = 76 
+projectElfMachine EM_JAVELIN     = 77 
+projectElfMachine EM_FIREPATH    = 78 
+projectElfMachine EM_ZSP         = 79 
+projectElfMachine EM_MMIX        = 80 
+projectElfMachine EM_HUANY       = 81 
+projectElfMachine EM_PRISM       = 82 
+projectElfMachine EM_AVR         = 83 
+projectElfMachine EM_FR30        = 84 
+projectElfMachine EM_D10V        = 85 
+projectElfMachine EM_D30V        = 86 
+projectElfMachine EM_V850        = 87 
+projectElfMachine EM_M32R        = 88 
+projectElfMachine EM_MN10300     = 89 
+projectElfMachine EM_MN10200     = 90 
+projectElfMachine EM_PJ          = 91 
+projectElfMachine EM_OPENRISC    = 92 
+projectElfMachine EM_ARC_A5      = 93 
+projectElfMachine EM_XTENSA      = 94 
+projectElfMachine EM_VIDEOCORE   = 95 
+projectElfMachine EM_TMM_GPP     = 96 
+projectElfMachine EM_NS32K       = 97 
+projectElfMachine EM_TPC         = 98 
+projectElfMachine EM_SNP1K       = 99 
+projectElfMachine EM_ST200       = 100
+projectElfMachine EM_IP2K        = 101
+projectElfMachine EM_MAX         = 102
+projectElfMachine EM_CR          = 103
+projectElfMachine EM_F2MC16      = 104
+projectElfMachine EM_MSP430      = 105
+projectElfMachine EM_BLACKFIN    = 106
+projectElfMachine EM_SE_C33      = 107
+projectElfMachine EM_SEP         = 108
+projectElfMachine EM_ARCA        = 109
+projectElfMachine EM_UNICORE     = 110
+projectElfMachine (EM_EXT n)     = n  
+
+putElfMachine ew m = putWord16 ew (projectElfMachine m)
 getElfMachine = liftM getElfMachine_ . getWord16
     where getElfMachine_ 0   = EM_NONE
           getElfMachine_ 1   = EM_M32
@@ -511,13 +654,64 @@ getElf_Ehdr = do
                    , TableInfo { tableOffset = fromIntegral e_shoff, entrySize = fromIntegral e_shentsize, entryNum = fromIntegral e_shnum }
                    , e_shstrndx)
 
+ehdrSize ELFCLASS32 = 52
+ehdrSize ELFCLASS64 = 64
+
+phentSize ELFCLASS32 = 32
+phentSize ELFCLASS64 = 56
+
+shentSize ELFCLASS32 = 40
+shentSize ELFCLASS64 = 64
+
+putElf_Ehdr :: (Elf, Word64, Word16, Word64, Word16, Word16) -> Put
+putElf_Ehdr (e, phoff, phnum, shoff, shnum, shstrndx) = do
+    putElfMagic
+    putElfClass $ elfClass e
+    putElfData $ elfData e
+    putElfVersion $ fromIntegral $ elfVersion e
+    putElfOsabi $ elfOSABI e
+    putWord8 $ fromIntegral $ elfABIVersion e
+    replicateM_ 7 (putWord8 0)
+    let ew = elfWriter $ elfData e
+    putElfType ew $ elfType e
+    putElfMachine ew $ elfMachine e
+    putWord32 ew 1 -- EV_CURRENT
+    case elfClass e of
+        ELFCLASS32 -> do
+            putWord32 ew $ fromIntegral $ elfEntry e
+            putWord32 ew $ fromIntegral phoff
+            putWord32 ew $ fromIntegral shoff
+        ELFCLASS64 -> do
+            putWord64 ew $ elfEntry e
+            putWord64 ew phoff
+            putWord64 ew shoff
+    putWord32 ew 0 -- flags, unrecorded
+    putWord16 ew $ ehdrSize $ elfClass e
+    putWord16 ew $ phentSize $ elfClass e
+    putWord16 ew phnum
+    putWord16 ew $ shentSize $ elfClass e
+    putWord16 ew shnum
+    putWord16 ew shstrndx
+
 data ElfReader = ElfReader
     { getWord16 :: Get Word16
     , getWord32 :: Get Word32
     , getWord64 :: Get Word64
     }
+
+data ElfWriter = ElfWriter
+    { putWord16 :: Word16 -> Put
+    , putWord32 :: Word32 -> Put
+    , putWord64 :: Word64 -> Put
+    }
+
 elfReader ELFDATA2LSB = ElfReader { getWord16 = getWord16le, getWord32 = getWord32le, getWord64 = getWord64le }
 elfReader ELFDATA2MSB = ElfReader { getWord16 = getWord16be, getWord32 = getWord32be, getWord64 = getWord64be }
+
+elfWriter ELFDATA2LSB = ElfWriter { putWord16 = putWord16le, putWord32 = putWord32le, putWord64 = putWord64le }
+elfWriter ELFDATA2MSB = ElfWriter { putWord16 = putWord16be, putWord32 = putWord32be, putWord64 = putWord64be }
+
+
 
 divide :: B.ByteString -> Int -> Int -> [B.ByteString]
 divide bs s 0 = []
@@ -539,6 +733,10 @@ parseElf b =
         parseEntry p x                  = runGet (p (elfClass e) (elfReader (elfData e))) (L.fromChunks [x])
         (e, segTab, secTab, e_shstrndx) = runGet getElf_Ehdr $ L.fromChunks [b]
 
+-- | Renders an Elf record back into a ByteString. Intended for modifying binaries. If an ELF uses a feature not
+--   understood by the parser, this may not be idempotent, but it is intended that this be an inverse of parseElf
+renderElf :: Elf -> B.ByteString
+renderElf e = undefined
 
 data ElfSegment = ElfSegment
   { elfSegmentType      :: ElfSegmentType   -- ^ Segment type
